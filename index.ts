@@ -1,20 +1,69 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import puppeteer from "puppeteer";
+import puppeteer, { Browser, Page } from "puppeteer";
 
 const OUT_DIR = "./medium_recommended";
 await fs.mkdir(OUT_DIR, { recursive: true });
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+interface ParsedArgs {
+  tags: string[];
+  scrolls: number;
+  minClaps: number;
+  limit: number;
+  include: string[];
+  exclude: string[];
+  headless: boolean;
+}
 
-function parseArgs() {
+interface Article {
+  url: string | null;
+  title: string | null;
+  createdAt: string;
+  claps: number | null;
+  comments: number | null;
+  tag: string;
+}
+
+interface RawArticle {
+  url: string | null;
+  title: string | null;
+  datetime: string | null;
+  timeLabel: string | null;
+  claps: number | null;
+  comments: number | null;
+}
+
+interface Metrics {
+  claps: number | null;
+  comments: number | null;
+}
+
+interface MergeResult {
+  merged: Article[];
+  newCount: number;
+  updatedCount: number;
+}
+
+interface ScrapeOptions {
+  scrolls: number;
+  minClaps: number;
+  limit: number;
+  include: string[];
+  exclude: string[];
+  headless: boolean;
+  browser: Browser;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
+
+function parseArgs(): ParsedArgs {
   const args = process.argv.slice(2);
   if (!args.length) {
-    console.error("Usage: node index.mjs <tag1,tag2,tag3> [--scrolls N] [--minClaps N] [--limit N] [--include kw1,kw2] [--exclude kw1,kw2] [--headless true|false]");
+    console.error("Usage: node index.js <tag1,tag2,tag3> [--scrolls N] [--minClaps N] [--limit N] [--include kw1,kw2] [--exclude kw1,kw2] [--headless true|false]");
     process.exit(1);
   }
   const tags = args[0].split(",").map(t => t.trim()).filter(Boolean);
-  let scrolls = 6, minClaps = 0, limit = 30, include = [], exclude = [], headless = true;
+  let scrolls = 6, minClaps = 0, limit = 30, include: string[] = [], exclude: string[] = [], headless = true;
   for (let i = 1; i < args.length; i++) {
     const a = args[i];
     if (a === "--scrolls")   scrolls   = Number(args[++i] ?? "6")  || 6;
@@ -27,28 +76,29 @@ function parseArgs() {
   return { tags, scrolls, minClaps, limit, include, exclude, headless };
 }
 
-function monthStamp(d = new Date()) {
+function monthStamp(d: Date = new Date()): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   return `${y}-${m}`;
 }
 
-function includesAny(text, kws) {
+function includesAny(text: string | null, kws: string[]): boolean {
   if (!kws.length) return true;
   const low = (text || "").toLowerCase();
   return kws.some(k => low.includes(k.toLowerCase()));
 }
-function excludesAll(text, kws) {
+
+function excludesAll(text: string | null, kws: string[]): boolean {
   if (!kws.length) return true;
   const low = (text || "").toLowerCase();
   return !kws.some(k => low.includes(k.toLowerCase()));
 }
 
-function parseDateLikeToISO(label) {
+function parseDateLikeToISO(label: string | null): string | null {
   if (!label) return null;
   const s = String(label).trim();
   const now = new Date();
-  let m;
+  let m: RegExpMatchArray | null;
 
   if ((m = s.match(/(\d+)\s*d(?:ay)?s?\s*ago/i))) {
     const d = new Date(now);
@@ -73,18 +123,18 @@ function parseDateLikeToISO(label) {
   }
 
   if ((m = s.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})(?:,\s*(\d{4}))?/i))) {
-    const monthMap = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+    const monthMap: Record<string, number> = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
     const mm = monthMap[m[1].slice(0,3).toLowerCase()];
     const dd = Number(m[2]);
     const yyyy = m[3] ? Number(m[3]) : now.getFullYear();
     const d = new Date(yyyy, mm, dd);
-    return isNaN(d) ? null : d.toISOString();
+    return isNaN(d.getTime()) ? null : d.toISOString();
   }
 
   return null;
 }
 
-async function autoScroll(page, maxScrolls = 10, waitForLoad = 2500) {
+async function autoScroll(page: Page, maxScrolls: number = 10, waitForLoad: number = 2500): Promise<void> {
   let previousHeight = await page.evaluate("document.body.scrollHeight");
   for (let i = 0; i < maxScrolls; i++) {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
@@ -105,14 +155,29 @@ async function autoScroll(page, maxScrolls = 10, waitForLoad = 2500) {
   }
 }
 
-function normalizeArticleUrl(absUrl) {
-  try { const u = new URL(absUrl); u.search=""; u.hash=""; return u.toString(); } catch { return null; }
+function normalizeArticleUrl(absUrl: string | null): string | null {
+  try {
+    if (!absUrl) return null;
+    const u = new URL(absUrl);
+    u.search="";
+    u.hash="";
+    return u.toString();
+  } catch {
+    return null;
+  }
 }
 
-async function extractFromPage(page) {
+async function extractFromPage(page: Page): Promise<RawArticle[]> {
   return await page.evaluate(() => {
-    const toAbs = (href) => { try { return new URL(href, location.origin).toString(); } catch { return null; } };
-    const toNum = (s) => {
+    const toAbs = (href: string): string | null => {
+      try {
+        return new URL(href, location.origin).toString();
+      } catch {
+        return null;
+      }
+    };
+
+    const toNum = (s: string | null): number | null => {
       if (!s) return null;
       const cleaned = String(s).replace(/[^\d.kKmM]/g, '');
       const m = /(\d+(?:\.\d+)?)([kKmM]?)/.exec(cleaned);
@@ -124,10 +189,11 @@ async function extractFromPage(page) {
       return Math.round(n);
     };
 
-    const findMetrics = (articleEl) => {
-      let claps = null, comments = null;
+    const findMetrics = (articleEl: Element): { claps: number | null; comments: number | null } => {
+      let claps: number | null = null;
+      let comments: number | null = null;
 
-      const clapElements = articleEl.querySelectorAll('[aria-label*="clap"], [title*="clap"], [data-testid*="clap"]');
+      const clapElements = Array.from(articleEl.querySelectorAll('[aria-label*="clap"], [title*="clap"], [data-testid*="clap"]'));
       for (const el of clapElements) {
         const label = (el.getAttribute('aria-label') || el.getAttribute('title') || '').toLowerCase();
         if (label.includes('clap')) {
@@ -140,31 +206,34 @@ async function extractFromPage(page) {
       }
 
       if (claps === null) {
-        const svgs = articleEl.querySelectorAll('svg');
+        const svgs = Array.from(articleEl.querySelectorAll('svg'));
         for (const svg of svgs) {
           const parent = svg.closest('div, span, button');
           if (parent) {
             const text = parent.textContent?.trim() || '';
             const numMatch = text.match(/^\d+(?:\.\d+)?[kKmM]?$/);
-            if (numMatch && !isNaN(toNum(numMatch[0]))) {
-              const svgContent = svg.innerHTML.toLowerCase();
-              const parentLabel = (parent.getAttribute('aria-label') || '').toLowerCase();
+            if (numMatch) {
+              const num = toNum(numMatch[0]);
+              if (num !== null && !isNaN(num)) {
+                const svgContent = svg.innerHTML.toLowerCase();
+                const parentLabel = (parent.getAttribute('aria-label') || '').toLowerCase();
 
-              if (parentLabel.includes('clap') || svgContent.includes('clap')) {
-                claps = toNum(numMatch[0]);
-              } else if (parentLabel.includes('comment') || parentLabel.includes('response')) {
-                comments = toNum(numMatch[0]);
-              } else if (claps === null) {
-                claps = toNum(numMatch[0]);
-              } else if (comments === null) {
-                comments = toNum(numMatch[0]);
+                if (parentLabel.includes('clap') || svgContent.includes('clap')) {
+                  claps = toNum(numMatch[0]);
+                } else if (parentLabel.includes('comment') || parentLabel.includes('response')) {
+                  comments = toNum(numMatch[0]);
+                } else if (claps === null) {
+                  claps = toNum(numMatch[0]);
+                } else if (comments === null) {
+                  comments = toNum(numMatch[0]);
+                }
               }
             }
           }
         }
       }
 
-      const buttons = articleEl.querySelectorAll('button, [role="button"]');
+      const buttons = Array.from(articleEl.querySelectorAll('button, [role="button"]'));
       for (const btn of buttons) {
         const text = btn.textContent?.trim() || '';
         const label = (btn.getAttribute('aria-label') || '').toLowerCase();
@@ -180,14 +249,12 @@ async function extractFromPage(page) {
       }
 
       if (claps === null) {
-        const textNodes = [];
+        const textNodes: string[] = [];
         const walker = document.createTreeWalker(
           articleEl,
-          NodeFilter.SHOW_TEXT,
-          null,
-          false
+          NodeFilter.SHOW_TEXT
         );
-        let node;
+        let node: Node | null;
         while (node = walker.nextNode()) {
           const text = node.textContent?.trim();
           if (text && /^\d+(?:\.\d+)?[kKmM]?$/.test(text)) {
@@ -205,7 +272,7 @@ async function extractFromPage(page) {
       return { claps, comments };
     };
 
-    const results = [];
+    const results: RawArticle[] = [];
 
     const selectors = [
       'article',
@@ -215,14 +282,14 @@ async function extractFromPage(page) {
       '[class*="post"]'
     ];
 
-    const articles = new Set();
+    const articles = new Set<Element>();
     selectors.forEach(sel => {
       document.querySelectorAll(sel).forEach(el => articles.add(el));
     });
 
     articles.forEach(art => {
-      let url = null;
-      const links = art.querySelectorAll('a[href]');
+      let url: string | null = null;
+      const links = Array.from(art.querySelectorAll('a[href]'));
       for (const a of links) {
         const href = a.getAttribute("href");
         if (!href) continue;
@@ -250,7 +317,7 @@ async function extractFromPage(page) {
       }
       if (!url) return;
 
-      let title = null;
+      let title: string | null = null;
       const titleSelectors = ['h1', 'h2', 'h3', 'h4', 'h5', '[data-testid*="title"]', '.title'];
       for (const sel of titleSelectors) {
         const titleEl = art.querySelector(sel);
@@ -260,22 +327,19 @@ async function extractFromPage(page) {
         }
       }
 
-      let datetime = null, timeLabel = null;
+      let datetime: string | null = null;
+      let timeLabel: string | null = null;
       const timeSelectors = ['time', '[datetime]', '.timestamp', '[data-testid*="time"]'];
       for (const sel of timeSelectors) {
         const timeEl = art.querySelector(sel);
         if (timeEl) {
           datetime = timeEl.getAttribute("datetime");
-          timeLabel = timeEl.textContent?.trim();
+          timeLabel = timeEl.textContent?.trim() || null;
           if (datetime || timeLabel) break;
         }
       }
 
       const { claps, comments } = findMetrics(art);
-
-      if (title) {
-        console.log(`Found: ${title} | Claps: ${claps} | Comments: ${comments} | Date: ${timeLabel || datetime}`);
-      }
 
       results.push({ url, title, datetime, timeLabel, claps, comments });
     });
@@ -284,7 +348,8 @@ async function extractFromPage(page) {
   });
 }
 
-async function scrapeTag(tag, { scrolls, minClaps, limit, include, exclude, headless, browser }) {
+async function scrapeTag(tag: string, options: ScrapeOptions): Promise<Article[]> {
+  const { scrolls, minClaps, limit, include, exclude, headless, browser } = options;
   const startUrl = `https://medium.com/tag/${encodeURIComponent(tag)}/recommended`;
 
   const page = await browser.newPage();
@@ -326,7 +391,7 @@ async function scrapeTag(tag, { scrolls, minClaps, limit, include, exclude, head
       comments: x.comments ?? null,
       tag
     }))
-    .filter(x => x.url)
+    .filter((x): x is Article => x.url !== null)
     .filter(x => includesAny(x.title || "", include))
     .filter(x => excludesAll(x.title || "", exclude))
     .filter(x => (x.claps == null ? true : x.claps >= minClaps))
@@ -337,13 +402,13 @@ async function scrapeTag(tag, { scrolls, minClaps, limit, include, exclude, head
     return normalized;
 
   } catch (error) {
-    console.error(`Error processing tag "${tag}":`, error.message);
+    console.error(`Error processing tag "${tag}":`, (error as Error).message);
     await page.close();
     return [];
   }
 }
 
-async function loadExistingData(filePath) {
+async function loadExistingData(filePath: string): Promise<Record<string, Article[]>> {
   try {
     const content = await fs.readFile(filePath, "utf-8");
     return JSON.parse(content);
@@ -352,7 +417,7 @@ async function loadExistingData(filePath) {
   }
 }
 
-function mergeArticles(existing, newArticles, tag) {
+function mergeArticles(existing: Record<string, Article[]>, newArticles: Article[], tag: string): MergeResult {
   const existingArticles = existing[tag] || [];
   const existingUrls = new Map(existingArticles.map(a => [a.url, a]));
 
@@ -363,7 +428,7 @@ function mergeArticles(existing, newArticles, tag) {
 
   newArticles.forEach(newArticle => {
     if (existingUrls.has(newArticle.url)) {
-      const existing = existingUrls.get(newArticle.url);
+      const existing = existingUrls.get(newArticle.url)!;
       existing.claps = newArticle.claps;
       existing.comments = newArticle.comments;
       updatedCount++;
@@ -383,7 +448,7 @@ function mergeArticles(existing, newArticles, tag) {
   return { merged, newCount, updatedCount };
 }
 
-async function main() {
+async function main(): Promise<void> {
   const { tags, scrolls, minClaps, limit, include, exclude, headless } = parseArgs();
 
   const browser = await puppeteer.launch({
@@ -416,7 +481,7 @@ async function main() {
       await fs.writeFile(outputFile, JSON.stringify(existingData, null, 2), "utf-8");
 
     } catch (error) {
-      console.error(`Failed to process tag "${tag}":`, error.message);
+      console.error(`Failed to process tag "${tag}":`, (error as Error).message);
     }
   }
 

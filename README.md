@@ -17,16 +17,22 @@ npm install
 
 ## Usage
 
+### Build
+
+```bash
+npm run build
+```
+
 ### Basic Command
 
 ```bash
-node index.mjs <tag1,tag2,tag3> [options]
+npm start <tag1,tag2,tag3> [options]
 ```
 
 Example:
 
 ```bash
-node index.mjs programming,technology
+npm start programming,technology
 ```
 
 ---
@@ -50,7 +56,7 @@ node index.mjs programming,technology
 **Scrape two tags with filters:**
 
 ```bash
-node index.mjs programming,ai --minClaps 100 --limit 50
+npm start programming,ai --minClaps 100 --limit 50
 ```
 
 > Fetch articles for `programming` and `ai` tags, only include articles with **100+ claps**, keep **top 50** articles.
@@ -60,7 +66,7 @@ node index.mjs programming,ai --minClaps 100 --limit 50
 **Include and exclude keywords:**
 
 ```bash
-node index.mjs blockchain,web3 --include ethereum,defi --exclude scam,hack
+npm start blockchain,web3 --include ethereum,defi --exclude scam,hack
 ```
 
 > Scrape `blockchain` and `web3` tags, **only include titles containing `ethereum` or `defi`**, and **exclude titles containing `scam` or `hack`**.
@@ -70,7 +76,7 @@ node index.mjs blockchain,web3 --include ethereum,defi --exclude scam,hack
 **Debug mode (non-headless):**
 
 ```bash
-node index.mjs startups --headless false
+npm start startups --headless false
 ```
 
 > Opens the browser window so you can see what Puppeteer is doing.
