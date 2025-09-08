@@ -2,22 +2,22 @@
   "name": "medium-content-fetcher",
   "version": "1.0.0",
   "description": "This tool scrapes Medium's recommended articles for one or more tags, extracts useful metadata.",
-  "main": "dist/index.js",
+  "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node index.ts"
+    "start": "node dist/main.js",
+    "start:all": "node dist/main.js \"software-development,coding,programming,data-science,self-improvement,python,machine-learning,software-engineering,aws,devops,cybersecurity,artificial-intelligence\" --scrolls 6 --limit 20 --minClaps 300",
+    "dev": "ts-node main.ts"
   },
   "keywords": [],
-  "author": "",
   "license": "MIT",
   "type": "module",
   "dependencies": {
     "puppeteer": "^24.19.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0",
-    "ts-node": "^10.9.0"
+    "@types/node": "^24.3.1",
+    "typescript": "^5.9.2",
+    "ts-node": "^10.9.2"
   }
 }

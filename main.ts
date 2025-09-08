@@ -59,7 +59,7 @@ const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 function parseArgs(): ParsedArgs {
   const args = process.argv.slice(2);
   if (!args.length) {
-    console.error("Usage: node index.js <tag1,tag2,tag3> [--scrolls N] [--minClaps N] [--limit N] [--include kw1,kw2] [--exclude kw1,kw2] [--headless true|false]");
+    console.error("Usage: <tag1,tag2,tag3> [--scrolls N] [--minClaps N] [--limit N] [--include kw1,kw2] [--exclude kw1,kw2] [--headless true|false]");
     process.exit(1);
   }
   const tags = args[0].split(",").map(t => t.trim()).filter(Boolean);
@@ -509,4 +509,7 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+void main().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});

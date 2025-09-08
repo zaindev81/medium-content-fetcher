@@ -125,3 +125,9 @@ Example: `medium-articles-2025-09.json`
   ]
 }
 ```
+
+---
+
+## License
+
+MIT License
